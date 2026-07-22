@@ -2,8 +2,8 @@ package broker
 
 import (
 	"context"
-	"fmt"
 	"go-message-queue/pkg/queue"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -50,7 +50,7 @@ func (t *topicState) addHandler(h queue.Handler) {
 // Blocks when the buffer is full (backpressure). Respects ctx cancellation.
 func (t *topicState) enqueue(ctx context.Context, payload []byte) error {
 	msg := queue.Message{
-		ID:        fmt.Sprintf("%s-%d", t.name, time.Now().UnixNano()),
+		ID:        t.name + "-" + strconv.FormatInt(time.Now().UnixNano(), 10),
 		Topic:     t.name,
 		Payload:   payload,
 		Attempts:  0,
@@ -74,14 +74,22 @@ func (t *topicState) dispatch(ctx context.Context, wg *sync.WaitGroup) {
 	go func() {
 		defer wg.Done()
 		for msg := range t.ch {
-			// Snapshot handlers under read lock — new subscribers added
-			// after this point will not receive this particular message.
 			t.handlersMu.RLock()
-			handlers := make([]queue.Handler, len(t.handlers))
-			copy(handlers, t.handlers)
+			handlers := t.handlers
 			t.handlersMu.RUnlock()
 
-			for _, h := range handlers {
+			// Single handler fast path — no allocation.
+			if len(handlers) == 1 {
+				t.deliver(ctx, msg, handlers[0])
+				continue
+			}
+
+			// Multiple handlers — snapshot to avoid holding the lock
+			// during delivery (handlers can be added concurrently).
+			snapshot := make([]queue.Handler, len(handlers))
+			copy(snapshot, handlers)
+
+			for _, h := range snapshot {
 				t.deliver(ctx, msg, h)
 			}
 		}

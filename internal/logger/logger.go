@@ -8,9 +8,11 @@ import (
 )
 
 // Logger writes structured key=value log lines to a configurable writer.
-// Pass io.Discard in tests and benchmarks to suppress all output.
+// When constructed with io.Discard, all formatting is skipped entirely —
+// no allocations on the hot path.
 type Logger struct {
-	out io.Writer
+	out     io.Writer
+	enabled bool
 }
 
 // New returns a Logger that writes to out.
@@ -19,17 +21,25 @@ func New(out io.Writer) *Logger {
 	if out == nil {
 		out = os.Stdout
 	}
-	return &Logger{out: out}
+	return &Logger{
+		out:     out,
+		enabled: out != io.Discard,
+	}
 }
 
 // Info logs an informational message with optional key=value pairs.
-// Pairs must be supplied as alternating key, value arguments.
 func (l *Logger) Info(msg string, kvs ...any) {
+	if !l.enabled {
+		return
+	}
 	l.write("INFO", msg, kvs...)
 }
 
 // Error logs an error message with optional key=value pairs.
 func (l *Logger) Error(msg string, kvs ...any) {
+	if !l.enabled {
+		return
+	}
 	l.write("ERROR", msg, kvs...)
 }
 
